@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LiveKit Videóhívás - NAS</title>
+  <!-- LiveKit Client SDK CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+    body { background-color: #121212; color: #ffffff; padding: 20px; text-align: center; }
+    h1 { margin-bottom: 20px; font-size: 1.5rem; }
+    
+    .form-container {
+      max-width: 500px; margin: 0 auto 20px auto; background: #1e1e1e;
+      padding: 20px; border-radius: 8px; display: flex; flex-direction: column; gap: 10px;
+    }
+    input {
+      padding: 10px; border-radius: 4px; border: 1px solid #333;
+      background: #2a2a2a; color: white; width: 100%;
+    }
+    button {
+      padding: 10px 15px; border-radius: 4px; border: none;
+      background: #0070f3; color: white; font-weight: bold; cursor: pointer;
+    }
+    button:hover { background: #0051a2; }
+    button.danger { background: #e53e3e; }
+    
+    .controls { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
+    
+    #video-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 15px; max-width: 1200px; margin: 0 auto;
+    }
+    .video-card {
+      background: #1e1e1e; border-radius: 8px; overflow: hidden;
+      position: relative; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
+    }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .participant-label {
+      position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6);
+      padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>LiveKit Videóhívás</h1>
+
+  <!-- Csatlakozási Űrlap -->
+  <div id="join-form" class="form-container">
+    <input type="text" id="server-url" placeholder="Szerver URL (pl. ws://192.168.100.254:7880)" value="ws://192.168.100.254:7880">
+    <input type="text" id="access-token" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkZXZrZXkiLCJzdWIiOiJFbGVrIiwiZXhwIjoxNzg2MDE1MTE2LCJuYmYiOjE3ODU5Mjg3MTYsImlhdCI6MTc4NTkyODcxNiwiaWRlbnRpdHkiOiJFbGVrIiwibmFtZSI6IkVsZWsiLCJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6InRlc3p0LXN6b2JhIn19.eVLMZMa7GAM_lQauoigwMt6HMMNfWnrrGtpk0s0pw4A">
+    <button id="btn-connect">Csatlakozás a híváshoz</button>
+  </div>
+
+  <!-- Hívás Vezérlők -->
+  <div id="room-controls" class="controls" style="display: none;">
+    <button id="btn-toggle-mic">Mute Mikrofon</button>
+    <button id="btn-toggle-cam">Mute Kamera</button>
+    <button id="btn-disconnect" class="danger">Lekapcsolódás</button>
+  </div>
+
+  <!-- Videó Rács -->
+  <div id="video-grid"></div>
+
+  <script>
+    const { Room, RoomEvent, Track } = LivekitClient;
+
+    let currentRoom = null;
+    let localAudioTrack = null;
+    let localVideoTrack = null;
+
+    const btnConnect = document.getElementById('btn-connect');
+    const btnDisconnect = document.getElementById('btn-disconnect');
+    const btnToggleMic = document.getElementById('btn-toggle-mic');
+    const btnToggleCam = document.getElementById('btn-toggle-cam');
+    const joinForm = document.getElementById('join-form');
+    const roomControls = document.getElementById('room-controls');
+    const videoGrid = document.getElementById('video-grid');
+
+    btnConnect.addEventListener('click', async () => {
+      const url = document.getElementById('server-url').value.trim();
+      const token = document.getElementById('access-token').value.trim();
+
+      if (!url || !token) {
+        alert('Kérlek add meg a Szerver URL-t és a Tokent!');
+        return;
+      }
+
+      try {
+        currentRoom = new Room({ adaptiveStream: true, dynacast: true });
+
+        // Eseménykezelők távoli résztvevők sávjaira (Audio/Video)
+        currentRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          attachTrack(track, participant.identity);
+        });
+
+        currentRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+          detachTrack(track);
+        });
+
+        currentRoom.on(RoomEvent.Disconnected, () => {
+          cleanupUI();
+        });
+
+        // Csatlakozás a szobához
+        await currentRoom.connect(url, token);
+
+        // Saját mikrofon és kamera bekapcsolása és publikálása
+        await currentRoom.localParticipant.enableCameraAndMicrophone();
+
+        // Saját sávok megjelenítése
+        currentRoom.localParticipant.trackPublications.forEach((pub) => {
+          if (pub.track) {
+            attachTrack(pub.track, `${currentRoom.localParticipant.identity} (Saját)`);
+          }
+        });
+
+        joinForm.style.display = 'none';
+        roomControls.style.display = 'flex';
+
+      } catch (error) {
+        console.error('Hiba a csatlakozás során:', error);
+        alert('Nem sikerült csatlakozni: ' + error.message);
+      }
+    });
+
+    // Videó / Audio elem csatolása a DOM-hoz
+    function attachTrack(track, identity) {
+      const element = track.attach();
+      let card = document.getElementById(`card-${track.sid}`);
+      
+      if (!card) {
+        card = document.createElement('div');
+        card.id = `card-${track.sid}`;
+        card.className = 'video-card';
+
+        const label = document.createElement('div');
+        label.className = 'participant-label';
+        label.innerText = identity;
+        card.appendChild(label);
+
+        videoGrid.appendChild(card);
+      }
+
+      card.appendChild(element);
+    }
+
+    // Videó / Audio elem eltávolítása
+    function detachTrack(track) {
+      const elements = track.detach();
+      elements.forEach(el => el.remove());
+      const card = document.getElementById(`card-${track.sid}`);
+      if (card) card.remove();
+    }
+
+    // Mute gombok
+    btnToggleMic.addEventListener('click', async () => {
+      if (!currentRoom) return;
+      const enabled = currentRoom.localParticipant.isMicrophoneEnabled;
+      await currentRoom.localParticipant.setMicrophoneEnabled(!enabled);
+      btnToggleMic.innerText = enabled ? 'Unmute Mikrofon' : 'Mute Mikrofon';
+    });
+
+    btnToggleCam.addEventListener('click', async () => {
+      if (!currentRoom) return;
+      const enabled = currentRoom.localParticipant.isCameraEnabled;
+      await currentRoom.localParticipant.setCameraEnabled(!enabled);
+      btnToggleCam.innerText = enabled ? 'Unmute Kamera' : 'Mute Kamera';
+    });
+
+    // Lekapcsolódás
+    btnDisconnect.addEventListener('click', async () => {
+      if (currentRoom) {
+        await currentRoom.disconnect();
+      }
+    });
+
+    function cleanupUI() {
+      videoGrid.innerHTML = '';
+      joinForm.style.display = 'flex';
+      roomControls.style.display = 'none';
+      btnToggleMic.innerText = 'Mute Mikrofon';
+      btnToggleCam.innerText = 'Mute Kamera';
+    }
+  </script>
+</body>
+</html>
