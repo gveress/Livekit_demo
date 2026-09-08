@@ -28,8 +28,9 @@
     
     .controls { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
     
+    /* Távoli résztvevők rácsa */
     #video-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
       gap: 15px; max-width: 1200px; margin: 0 auto;
     }
     .video-card {
@@ -39,7 +40,14 @@
     video { width: 100%; height: 100%; object-fit: cover; }
     .participant-label {
       position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6);
-      padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;
+      padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; z-index: 2;
+    }
+
+    /* Saját kis előnézeti ablak a jobb alsó sarokban */
+    #local-preview {
+      position: fixed; bottom: 20px; right: 20px; width: 200px; aspect-ratio: 16/9;
+      background: #222; border-radius: 8px; overflow: hidden; border: 2px solid #0070f3;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 100; display: none;
     }
   </style>
 </head>
@@ -49,8 +57,8 @@
 
   <!-- Csatlakozási Űrlap -->
   <div id="join-form" class="form-container">
-    <input type="text" id="server-url" placeholder="Szerver URL (pl. ws://192.168.100.254:7880)" value="ws://192.168.100.254:7880">
-    <input type="text" id="access-token" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkZXZrZXkiLCJzdWIiOiJFbGVrIiwiZXhwIjoxNzg2MDE1MTE2LCJuYmYiOjE3ODU5Mjg3MTYsImlhdCI6MTc4NTkyODcxNiwiaWRlbnRpdHkiOiJFbGVrIiwibmFtZSI6IkVsZWsiLCJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6InRlc3p0LXN6b2JhIn19.eVLMZMa7GAM_lQauoigwMt6HMMNfWnrrGtpk0s0pw4A">
+    <input type="text" id="server-url" placeholder="Szerver URL (pl. ws://192.168.1.100:7880)" value="ws://192.168.1.100:7880">
+    <input type="text" id="access-token" placeholder="LiveKit Access Token (JWT)">
     <button id="btn-connect">Csatlakozás a híváshoz</button>
   </div>
 
@@ -61,15 +69,18 @@
     <button id="btn-disconnect" class="danger">Lekapcsolódás</button>
   </div>
 
-  <!-- Videó Rács -->
+  <!-- Videó Rács (Távoli résztvevők) -->
   <div id="video-grid"></div>
+
+  <!-- Saját kis előnézeti ablak -->
+  <div id="local-preview">
+    <div class="participant-label">Saját kép</div>
+  </div>
 
   <script>
     const { Room, RoomEvent, Track } = LivekitClient;
 
     let currentRoom = null;
-    let localAudioTrack = null;
-    let localVideoTrack = null;
 
     const btnConnect = document.getElementById('btn-connect');
     const btnDisconnect = document.getElementById('btn-disconnect');
@@ -78,6 +89,7 @@
     const joinForm = document.getElementById('join-form');
     const roomControls = document.getElementById('room-controls');
     const videoGrid = document.getElementById('video-grid');
+    const localPreview = document.getElementById('local-preview');
 
     btnConnect.addEventListener('click', async () => {
       const url = document.getElementById('server-url').value.trim();
@@ -91,11 +103,9 @@
       try {
         currentRoom = new Room({ adaptiveStream: true, dynacast: true });
 
-        // 1. Távoli résztvevők sávjainak kezelése (A saját sávokat itt kiszűrjük)
+        // Távoli résztvevő videó/audio csatlakozása
         currentRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          if (participant !== currentRoom.localParticipant) {
-            attachTrack(track, participant.identity);
-          }
+          attachTrack(track, participant.identity);
         });
 
         currentRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
@@ -109,19 +119,20 @@
         // Csatlakozás a szobához
         await currentRoom.connect(url, token);
 
-        // 2. Saját mikrofon és kamera bekapcsolása
+        // Saját mikrofon és kamera indítása
         await currentRoom.localParticipant.enableCameraAndMicrophone();
 
-        // 3. Saját sávok megjelenítése (Csak egyszer kerülnek kirakásra)
-        currentRoom.localParticipant.trackPublications.forEach((pub) => {
+        // Saját videó elhelyezése a kis sarokablakban
+        currentRoom.localParticipant.videoTrackPublications.forEach((pub) => {
           if (pub.track) {
-            attachTrack(pub.track, `${currentRoom.localParticipant.identity} (Saját)`);
+            const el = pub.track.attach();
+            localPreview.appendChild(el);
           }
         });
 
-        // Felület frissítése: Űrlap elrejtése, vezérlők megjelenítése
         joinForm.style.display = 'none';
         roomControls.style.display = 'flex';
+        localPreview.style.display = 'block';
 
       } catch (error) {
         console.error('Hiba a csatlakozás során:', error);
@@ -129,11 +140,18 @@
       }
     });
 
-    // Videó / Audio elem csatolása a DOM-hoz
+    // Sávok megjelenítése (CSAK VIDEÓ ESETÉN HOZ LÉTRE KÁRTYÁT)
     function attachTrack(track, identity) {
       const element = track.attach();
+
+      // Ha hang (audio), csak lejátsszuk a háttérben, nem csinálunk neki videókártyát
+      if (track.kind === Track.Kind.Audio) {
+        document.body.appendChild(element);
+        return;
+      }
+
+      // Videó esetén létrehozzuk a kártyát
       let card = document.getElementById(`card-${track.sid}`);
-      
       if (!card) {
         card = document.createElement('div');
         card.id = `card-${track.sid}`;
@@ -150,7 +168,7 @@
       card.appendChild(element);
     }
 
-    // Videó / Audio elem eltávolítása
+    // Sávok eltávolítása
     function detachTrack(track) {
       const elements = track.detach();
       elements.forEach(el => el.remove());
@@ -158,7 +176,7 @@
       if (card) card.remove();
     }
 
-    // Mute gombok
+    // Mute mikrofon
     btnToggleMic.addEventListener('click', async () => {
       if (!currentRoom) return;
       const enabled = currentRoom.localParticipant.isMicrophoneEnabled;
@@ -166,6 +184,7 @@
       btnToggleMic.innerText = enabled ? 'Unmute Mikrofon' : 'Mute Mikrofon';
     });
 
+    // Mute kamera
     btnToggleCam.addEventListener('click', async () => {
       if (!currentRoom) return;
       const enabled = currentRoom.localParticipant.isCameraEnabled;
@@ -182,6 +201,8 @@
 
     function cleanupUI() {
       videoGrid.innerHTML = '';
+      localPreview.innerHTML = '<div class="participant-label">Saját kép</div>';
+      localPreview.style.display = 'none';
       joinForm.style.display = 'flex';
       roomControls.style.display = 'none';
       btnToggleMic.innerText = 'Mute Mikrofon';
