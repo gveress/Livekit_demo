@@ -91,9 +91,11 @@
       try {
         currentRoom = new Room({ adaptiveStream: true, dynacast: true });
 
-        // Eseménykezelők távoli résztvevők sávjaira (Audio/Video)
+        // 1. Távoli résztvevők sávjainak kezelése (A saját sávokat itt kiszűrjük)
         currentRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          attachTrack(track, participant.identity);
+          if (participant !== currentRoom.localParticipant) {
+            attachTrack(track, participant.identity);
+          }
         });
 
         currentRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
@@ -107,16 +109,17 @@
         // Csatlakozás a szobához
         await currentRoom.connect(url, token);
 
-        // Saját mikrofon és kamera bekapcsolása és publikálása
+        // 2. Saját mikrofon és kamera bekapcsolása
         await currentRoom.localParticipant.enableCameraAndMicrophone();
 
-        // Saját sávok megjelenítése
+        // 3. Saját sávok megjelenítése (Csak egyszer kerülnek kirakásra)
         currentRoom.localParticipant.trackPublications.forEach((pub) => {
           if (pub.track) {
             attachTrack(pub.track, `${currentRoom.localParticipant.identity} (Saját)`);
           }
         });
 
+        // Felület frissítése: Űrlap elrejtése, vezérlők megjelenítése
         joinForm.style.display = 'none';
         roomControls.style.display = 'flex';
 
